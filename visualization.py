@@ -51,7 +51,7 @@ def visualize_fitness_plot(frame: tk.Frame, history: list):
     ax.set_ylabel("Fitness (1.0 = Solved)")
     ax.grid(True)
 
-    
+
 
     canvas = FigureCanvasTkAgg(fig, master=frame)
     canvas.draw()

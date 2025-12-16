@@ -5,7 +5,9 @@ import networkx as nx
 # --- Utility Functions ---
 
 def fitness(graph: nx.Graph, colors: list) -> float:
-    """Calculates the fitness based on the number of conflicts (edges connecting same-colored nodes)."""
+    """
+    Calculates the fitness based on the number of conflicts (edges connecting same-colored nodes).
+    """
     conflicts = 0
     # Create a color map {node: color} based on the ascending order of nodes (0, 1, 2,...)
     ordered_nodes = sorted(graph.nodes())
@@ -18,7 +20,9 @@ def fitness(graph: nx.Graph, colors: list) -> float:
 
 
 def mutate(colors: list, num_colors: int) -> list:
-    """Applies mutation by randomly changing the color of one node."""
+    """
+    Applies mutation by randomly changing the color of one node.
+    """
     new_colors = colors[:]
     if not new_colors:
         return []
@@ -29,7 +33,9 @@ def mutate(colors: list, num_colors: int) -> list:
 
 
 def crossover(p1: list, p2: list) -> list:
-    """Performs single-point crossover between two parents."""
+    """
+    Performs single-point crossover between two parents.
+    """
     if len(p1) < 2:
         return p1[:]
     cut = random.randint(1, len(p1) - 1)
@@ -61,7 +67,7 @@ def cultural_algorithm(graph: nx.Graph, num_colors: int = 3, population_size: in
 
         fitness_history.append(best_fit)
 
-        # Early stopping logic
+
         if stop_early and best_fit == 1.0:
             break
 
@@ -69,23 +75,24 @@ def cultural_algorithm(graph: nx.Graph, num_colors: int = 3, population_size: in
         if len(belief_space) > belief_size:
             belief_space.pop(0)
 
-        new_pop = [best[:]]  # Elitism
+        new_pop = [best[:]]
+
 
         while len(new_pop) < population_size:
-            # Parent selection (influenced by belief space)
+
             parent1 = random.choice(belief_space) if belief_space and random.random() < 0.7 else random.choice(
                 population)
             parent2 = random.choice(population)
 
             child = crossover(parent1, parent2)
 
-            # Influence phase from belief space
+
             if belief_space and random.random() < 0.5:
                 for i in range(n):
                     if random.random() < 0.12:
                         child[i] = random.choice([b[i] for b in belief_space])
 
-            # Mutation
+
             if random.random() < 0.25:
                 child = mutate(child, num_colors)
 
@@ -99,12 +106,16 @@ def cultural_algorithm(graph: nx.Graph, num_colors: int = 3, population_size: in
 # --- Backtracking Algorithm ---
 
 def order_nodes_by_degree(graph: nx.Graph) -> list:
-    """Sorts nodes by degree descending (Most Constrained Variable heuristic)."""
+    """
+    Sorts nodes by degree descending (Most Constrained Variable heuristic).
+    """
     return sorted(graph.nodes(), key=lambda x: graph.degree[x], reverse=True)
 
 
 def is_safe_bt(graph: nx.Graph, node: int, color: int, colors: dict) -> bool:
-    """Checks if assigning a color to a node is safe (no neighbor has the same color)."""
+    """
+    Checks if assigning a color to a node is safe (no neighbor has the same color).
+    """
     for neighbor in graph.neighbors(node):
         if colors.get(neighbor) == color:
             return False
@@ -136,7 +147,6 @@ def backtracking_coloring(graph: nx.Graph, num_colors: int):
 
     success = helper(0)
 
-    # Convert dictionary colors to an ordered list (0, 1, 2,...)
     if success:
         for node, color in colors.items():
             result_list[node_to_idx[node]] = color

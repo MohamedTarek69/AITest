@@ -1,0 +1,509 @@
+# Graph_Solver_App.py
+# نسخة مُحسّنة كاملة: Backtracking + Cultural Algorithm مع GUI (Tkinter, Matplotlib, NetworkX)
+# تأكد أن بيئتك Python مناسبة (يفضل 3.10/3.11/3.12) وأن networkx, matplotlib مثبتين.
+
+import os
+import random
+import threading
+import time
+import tkinter as tk
+from tkinter import ttk, messagebox
+from math import inf
+
+# try import networkx / matplotlib
+try:
+    import networkx as nx
+except Exception as e:
+    nx = None
+
+try:
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+except Exception as e:
+    plt = None
+    FigureCanvasTkAgg = None
+
+
+# =========================
+# Utilities & Algorithms
+# =========================
+
+COLOR_PALETTE = [
+    "#FF595E", "#FFCA3A", "#8AC926", "#1982C4", "#6A4C93",
+    "#FF9F1C", "#00A6A6", "#9B5DE5", "#F15BB5", "#2EC4B6",
+    "#E71D36", "#007F5F", "#6A0572"
+]
+
+
+def fitness(graph, colors):
+    """1/(1+conflicts) where conflicts = number of edges whose endpoints share the same color."""
+    if graph is None:
+        return 0.0
+    conflicts = 0
+    for u, v in graph.edges():
+        if colors[u] == colors[v]:
+            conflicts += 1
+    return 1.0 / (1 + conflicts)
+
+
+def crossover(p1, p2):
+    """Single cut-point crossover."""
+    if len(p1) < 2:
+        return p1[:]
+    point = random.randint(1, len(p1) - 1)
+    return p1[:point] + p2[point:]
+
+
+def mutate(colors, num_colors):
+    """Mutate one random position (returns a new list)."""
+    new = colors[:]
+    idx = random.randint(0, len(colors) - 1)
+    new[idx] = random.randint(1, num_colors)
+    return new
+
+
+def cultural_algorithm(graph, num_colors=3, population_size=30,
+                       generations=300, belief_size=5, verbose=False):
+    """
+    Cultural Algorithm:
+      - population: list of color-assignments (lists of ints 1..num_colors)
+      - belief_space: recent best solutions (list)
+      - elitism: carry best individual forward
+    Returns (best_solution_list, best_fitness_value)
+    """
+    n = graph.number_of_nodes()
+    if n == 0:
+        return [], 0.0
+
+    # initialize
+    population = [[random.randint(1, num_colors) for _ in range(n)]
+                  for _ in range(population_size)]
+    belief_space = []
+
+    for gen in range(generations):
+        # compute fitness
+        fits = [fitness(graph, ind) for ind in population]
+        best_idx = max(range(len(fits)), key=lambda i: fits[i])
+        best = population[best_idx][:]
+
+        # update belief space (keep latest bests)
+        belief_space.append(best[:])
+        if len(belief_space) > belief_size:
+            belief_space.pop(0)
+
+        # new population with elitism
+        new_pop = [best[:]]
+
+        while len(new_pop) < population_size:
+            # pick parents
+            parent1 = random.choice(belief_space) if belief_space and random.random() < 0.7 else random.choice(population)
+            parent2 = random.choice(population)
+
+            child = crossover(parent1, parent2)
+
+            # influence from belief space: occasionally set genes from belief space
+            if belief_space and random.random() < 0.5:
+                for i in range(n):
+                    if random.random() < 0.12:
+                        child[i] = random.choice([b[i] for b in belief_space])
+
+            # mutation
+            if random.random() < 0.25:
+                child = mutate(child, num_colors)
+
+            new_pop.append(child)
+
+        population = new_pop
+
+        if verbose and gen % max(1, generations // 10) == 0:
+            best_fit = fits[best_idx]
+            # print status occasionally
+            print(f"[CA] gen {gen}/{generations} best_fit={best_fit:.6f}")
+
+    # final best
+    fits = [fitness(graph, ind) for ind in population]
+    best_idx = max(range(len(fits)), key=lambda i: fits[i])
+    return population[best_idx], fits[best_idx]
+
+
+# =========================
+# Backtracking (Exact)
+# =========================
+
+def order_nodes_by_degree(graph):
+    """Return nodes ordered by degree descending (list)."""
+    return sorted(graph.nodes(), key=lambda x: graph.degree[x], reverse=True)
+
+
+def is_safe_bt(graph, node, color, colors):
+    for neighbor in graph.neighbors(node):
+        if colors[neighbor] == color:
+            return False
+    return True
+
+
+def backtracking_coloring(graph, num_colors):
+    """
+    Deterministic backtracking using degree ordering.
+    Returns (success: bool, result_colors_list_sorted_by_node)
+    """
+    if graph is None:
+        return False, []
+
+    nodes = sorted(graph.nodes())
+    order = order_nodes_by_degree(graph)  # nodes in order to assign
+    n = len(nodes)
+    colors = {node: 0 for node in nodes}
+
+    def helper(idx):
+        if idx == len(order):
+            return True
+        node = order[idx]
+        for c in range(1, num_colors + 1):
+            if is_safe_bt(graph, node, c, colors):
+                colors[node] = c
+                if helper(idx + 1):
+                    return True
+                colors[node] = 0
+        return False
+
+    success = helper(0)
+    # return colors in the canonical node order (sorted)
+    result = [colors[n] for n in nodes]
+    return success, result
+
+
+# =========================
+# Visualization helper
+# =========================
+
+def visualize_on_tk(frame, graph, colors, title="Graph"):
+    """Draw NetworkX graph into a Tk frame using matplotlib."""
+    # If matplotlib or networkx missing, show placeholder text
+    for w in frame.winfo_children():
+        w.destroy()
+
+    if graph is None or plt is None or nx is None:
+        lbl = tk.Label(frame, text="Visualization unavailable (missing matplotlib or networkx).")
+        lbl.pack(fill=tk.BOTH, expand=True)
+        return
+
+    fig = plt.Figure(figsize=(6, 4), dpi=100)
+    ax = fig.add_subplot(111)
+    ax.set_title(title)
+    try:
+        pos = nx.spring_layout(graph, seed=42)
+    except Exception:
+        pos = None
+
+    # ensure colors list length = number_of_nodes
+    n = graph.number_of_nodes()
+    node_colors = []
+    if colors is None or len(colors) != n:
+        node_colors = ["#CCCCCC"] * n
+    else:
+        for c in colors:
+            if isinstance(c, int) and 1 <= c <= len(COLOR_PALETTE):
+                node_colors.append(COLOR_PALETTE[c - 1])
+            else:
+                node_colors.append("#CCCCCC")
+
+    nx.draw(graph, pos=pos, ax=ax, with_labels=True,
+            node_color=node_colors, node_size=700, font_color="white", font_weight="bold")
+
+    canvas = FigureCanvasTkAgg(fig, master=frame)
+    canvas.draw()
+    widget = canvas.get_tk_widget()
+    widget.pack(fill=tk.BOTH, expand=True)
+
+
+# =========================
+# GUI Application
+# =========================
+
+class GraphColoringApp(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("Graph Coloring Problem Solver (Notebook Layout)")
+        self.geometry("1000x640")
+
+        # resources folder (use os.path.join to avoid \ escape warnings)
+        self.resources_folder = os.path.join(os.path.dirname(__file__), "GCPS App Assets")
+
+        self.graph = nx.Graph() if nx else None
+
+        # Notebook setup
+        self.notebook = ttk.Notebook(self)
+        self.notebook.pack(pady=8, padx=8, expand=True, fill='both')
+
+        setup_tab = ttk.Frame(self.notebook, padding="10")
+        self.notebook.add(setup_tab, text='⚙️ Graph Setup & Run')
+
+        results_tab = ttk.Frame(self.notebook, padding="10")
+        self.notebook.add(results_tab, text='📊 Results & Visualization')
+
+        # ------------------ Setup tab contents ------------------
+        control_frame = ttk.Frame(setup_tab)
+        control_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
+
+        ttk.Label(control_frame, text="Vertices (n):").pack(anchor=tk.W)
+        self.n_entry = ttk.Entry(control_frame, width=15)
+        self.n_entry.pack(fill=tk.X, pady=2)
+        self.n_entry.insert(0, "8")
+
+        ttk.Button(control_frame, text="Create Empty Graph", command=self.create_graph).pack(fill=tk.X, pady=4)
+        ttk.Button(control_frame, text="Generate Random Graph", command=self.generate_random_graph).pack(fill=tk.X, pady=4)
+
+        ttk.Separator(control_frame).pack(fill=tk.X, pady=6)
+
+        ttk.Label(control_frame, text="Add Edge (u v) - 1-based: ").pack(anchor=tk.W)
+        edge_frame = ttk.Frame(control_frame)
+        edge_frame.pack(fill=tk.X)
+        self.u_entry = ttk.Entry(edge_frame, width=6)
+        self.u_entry.pack(side=tk.LEFT)
+        self.v_entry = ttk.Entry(edge_frame, width=6)
+        self.v_entry.pack(side=tk.LEFT, padx=4)
+        ttk.Button(edge_frame, text="Add", command=self.add_edge).pack(side=tk.LEFT, padx=4)
+
+        self.edges_listbox = tk.Listbox(control_frame, height=10, width=18)
+        self.edges_listbox.pack(fill=tk.BOTH, expand=False, pady=6)
+
+        ttk.Button(control_frame, text="Remove Edge", command=self.remove_selected_edge).pack(fill=tk.X)
+
+        ttk.Separator(control_frame).pack(fill=tk.X, pady=6)
+
+        ttk.Label(control_frame, text="Number of colors:").pack(anchor=tk.W)
+        self.colors_entry = ttk.Entry(control_frame, width=15)
+        self.colors_entry.insert(0, "3")
+        self.colors_entry.pack(fill=tk.X, pady=2)
+
+        ttk.Label(control_frame, text="Algorithm:").pack(anchor=tk.W, pady=(8, 0))
+        self.algo_var = tk.StringVar(value="backtracking")
+        self.algo_var.trace_add("write", lambda *args: self.toggle_ca_params())
+
+        ttk.Radiobutton(control_frame, text="Backtracking", variable=self.algo_var, value="backtracking").pack(anchor=tk.W)
+        ttk.Radiobutton(control_frame, text="Cultural Algorithm", variable=self.algo_var, value="cultural").pack(anchor=tk.W)
+
+        # Cultural Algorithm params
+        self.ca_params_frame = ttk.Frame(control_frame)
+        ttk.Label(self.ca_params_frame, text="Population size:").pack(anchor=tk.W)
+        self.pop_entry = ttk.Entry(self.ca_params_frame, width=15)
+        self.pop_entry.insert(0, "30")
+        self.pop_entry.pack(fill=tk.X)
+
+        ttk.Label(self.ca_params_frame, text="Generations:").pack(anchor=tk.W)
+        self.gen_entry = ttk.Entry(self.ca_params_frame, width=15)
+        self.gen_entry.insert(0, "200")
+        self.gen_entry.pack(fill=tk.X)
+
+        ttk.Label(self.ca_params_frame, text="Belief size:").pack(anchor=tk.W)
+        self.belief_entry = ttk.Entry(self.ca_params_frame, width=15)
+        self.belief_entry.insert(0, "5")
+        self.belief_entry.pack(fill=tk.X)
+
+        # default hidden
+        self.ca_params_frame.pack_forget()
+
+        ttk.Button(control_frame, text="Run Algorithm", command=self.on_run).pack(fill=tk.X, pady=8)
+
+        # ------------------ Results tab contents ------------------
+        right_frame = ttk.Frame(results_tab)
+        right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+
+        self.vis_frame = ttk.Frame(right_frame)
+        self.vis_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(0, 6))
+
+        results_frame = ttk.Frame(right_frame)
+        results_frame.pack(side=tk.BOTTOM, fill=tk.X)
+        ttk.Label(results_frame, text="Results:").pack(anchor=tk.W)
+        self.result_text = tk.Text(results_frame, height=10)
+        self.result_text.pack(fill=tk.X, expand=True)
+
+        # status bar
+        self.status_var = tk.StringVar(value="Ready")
+        ttk.Label(self, textvariable=self.status_var).pack(side=tk.BOTTOM, fill=tk.X)
+
+        # initial create
+        if nx:
+            self.create_graph()
+        else:
+            self.status_var.set("networkx not found — install networkx to use this app")
+
+    # ----- GUI Actions -----
+
+    def toggle_ca_params(self):
+        if self.algo_var.get() == "cultural":
+            self.ca_params_frame.pack(fill=tk.X, pady=6)
+        else:
+            self.ca_params_frame.pack_forget()
+
+    def create_graph(self):
+        if nx is None:
+            messagebox.showerror("Missing dependency", "networkx is not installed.")
+            return
+        try:
+            n = int(self.n_entry.get())
+            if n <= 0:
+                raise ValueError
+        except ValueError:
+            messagebox.showerror("Invalid n", "Please enter a positive integer.")
+            return
+
+        self.graph = nx.Graph()
+        self.graph.add_nodes_from(range(n))
+        self.edges_listbox.delete(0, tk.END)
+        self.result_text.delete(1.0, tk.END)
+        self.status_var.set(f"Created empty graph with {n} vertices")
+        # update visualization
+        visualize_on_tk(self.vis_frame, self.graph, [0] * n, f"Empty Graph ({n} nodes)")
+
+    def generate_random_graph(self):
+        if nx is None:
+            messagebox.showerror("Missing dependency", "networkx is not installed.")
+            return
+        try:
+            n = int(self.n_entry.get())
+            if n <= 1:
+                messagebox.showerror("Input Error", "Graph must have at least 2 vertices to form edges.")
+                return
+        except ValueError:
+            messagebox.showerror("Invalid n", "Please enter a valid positive integer.")
+            return
+
+        self.graph = nx.Graph()
+        self.graph.add_nodes_from(range(n))
+        self.edges_listbox.delete(0, tk.END)
+        self.result_text.delete(1.0, tk.END)
+
+        # probability between 15% and 60%
+        p = random.uniform(0.15, 0.60)
+        edges_added = 0
+        for u in range(n):
+            for v in range(u + 1, n):
+                if random.random() < p:
+                    self.graph.add_edge(u, v)
+                    self.edges_listbox.insert(tk.END, f"{u + 1} {v + 1}")
+                    edges_added += 1
+
+        self.status_var.set(f"Generated random graph with {n} vertices and {edges_added} edges (p={p:.2f})")
+        visualize_on_tk(self.vis_frame, self.graph, [0] * n, f"Random Graph ({edges_added} edges)")
+        # do NOT auto-switch tab; user can switch to see visualization
+
+    def add_edge(self):
+        if nx is None:
+            messagebox.showerror("Missing dependency", "networkx is not installed.")
+            return
+        try:
+            u = int(self.u_entry.get()) - 1
+            v = int(self.v_entry.get()) - 1
+        except ValueError:
+            messagebox.showerror("Invalid", "Enter valid integers.")
+            return
+
+        if u == v:
+            messagebox.showerror("Invalid", "Self loops not allowed.")
+            return
+        if u not in self.graph.nodes() or v not in self.graph.nodes():
+            messagebox.showerror("Invalid", "Vertices must be within range.")
+            return
+        if self.graph.has_edge(u, v):
+            messagebox.showwarning("Duplicate", "Edge already exists.")
+            return
+
+        self.graph.add_edge(u, v)
+        self.edges_listbox.insert(tk.END, f"{u + 1} {v + 1}")
+        self.status_var.set(f"Added {u + 1}-{v + 1}")
+        visualize_on_tk(self.vis_frame, self.graph, [0] * self.graph.number_of_nodes(), "Graph (updated)")
+
+    def remove_selected_edge(self):
+        sel = self.edges_listbox.curselection()
+        if not sel:
+            return
+        idx = sel[0]
+        try:
+            u_str, v_str = self.edges_listbox.get(idx).split()
+            u, v = int(u_str) - 1, int(v_str) - 1
+        except:
+            return
+
+        if self.graph.has_edge(u, v):
+            self.graph.remove_edge(u, v)
+        self.edges_listbox.delete(idx)
+        self.status_var.set(f"Removed {u + 1}-{v + 1}")
+        visualize_on_tk(self.vis_frame, self.graph, [0] * self.graph.number_of_nodes(), "Graph (updated)")
+
+    def on_run(self):
+        if nx is None:
+            messagebox.showerror("Missing dependency", "networkx is not installed.")
+            return
+
+        if self.graph is None or self.graph.number_of_nodes() == 0:
+            messagebox.showerror("Empty", "Create a graph first.")
+            return
+
+        try:
+            num_colors = int(self.colors_entry.get())
+            if num_colors <= 0:
+                raise ValueError
+        except ValueError:
+            messagebox.showerror("Invalid", "Number of colors must be a positive integer.")
+            return
+
+        algo = self.algo_var.get()
+
+        # read CA params if needed
+        pop = gens = belief = None
+        if algo == "cultural":
+            try:
+                pop = int(self.pop_entry.get())
+                gens = int(self.gen_entry.get())
+                belief = int(self.belief_entry.get())
+                if pop <= 0 or gens <= 0 or belief <= 0:
+                    raise ValueError
+            except ValueError:
+                messagebox.showerror("Invalid", "CA parameters must be positive integers.")
+                return
+
+        # switch to Results tab
+        self.notebook.select(1)
+        self.status_var.set("Running...")
+        self.result_text.delete(1.0, tk.END)
+
+        # Run algorithm in background thread, update UI via self.after
+        thread = threading.Thread(target=self._run_worker, args=(algo, num_colors, pop, gens, belief), daemon=True)
+        thread.start()
+
+    def _run_worker(self, algo, num_colors, pop, gens, belief):
+        start = time.time()
+        if algo == "backtracking":
+            success, colors = backtracking_coloring(self.graph, num_colors)
+            elapsed = time.time() - start
+
+            # prepare display text
+            if success:
+                text = f"Backtracking: Solution found\nColors (by node 0..n-1): {colors}\nTime: {elapsed:.4f}s\n"
+            else:
+                text = f"Backtracking: No solution found with {num_colors} colors\nTime: {elapsed:.4f}s\n"
+
+            # schedule UI update
+            self.after(0, self._finish_run, colors, text, "Backtracking")
+        else:
+            # cultural
+            best, fit = cultural_algorithm(self.graph, num_colors=num_colors,
+                                           population_size=pop, generations=gens, belief_size=belief)
+            elapsed = time.time() - start
+            text = f"Cultural Algorithm: Best solution (fitness={fit:.6f})\nColors (by node 0..n-1): {best}\nTime: {elapsed:.4f}s\n"
+            self.after(0, self._finish_run, best, text, "Cultural Algorithm")
+
+    def _finish_run(self, colors, text, title):
+        # update result text
+        self.result_text.insert(tk.END, text)
+        # visualize
+        if self.graph:
+            visualize_on_tk(self.vis_frame, self.graph, colors, title)
+        self.status_var.set("Ready")
+
+
+if __name__ == "__main__":
+    app = GraphColoringApp()
+    app.mainloop()
